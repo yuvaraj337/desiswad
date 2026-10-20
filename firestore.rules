@@ -1,0 +1,158 @@
+rules_version = '2';
+
+// Production Firestore rules for Varahi Eat & Fit.
+// Sensitive payment, delivery-capacity and admin operations are server-controlled.
+// Deployed explicitly to replace the temporary Firebase Test Mode rules.
+// Security baseline: deny all unmatched documents and require authenticated ownership/admin access.
+// Triggered deployment refresh: keep Firebase rules deployment workflow active.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function admin() { return signedIn() && request.auth.token.admin == true; }
+    function owner(uid) { return signedIn() && request.auth.uid == uid; }
+    function ownsSubscriptionDocument() { return signedIn() && resource.data.userId == request.auth.uid; }
+    function ownsNewSubscriptionDocument() { return signedIn() && request.resource.data.userId == request.auth.uid; }
+
+    function validGuestOrder() {
+      return request.resource.data.keys().hasAll([
+        'orderId',
+        'name',
+        'phone',
+        'address',
+        'location',
+        'items',
+        'total',
+        'paymentMethod',
+        'paymentDone',
+        'paymentVerified',
+        'status',
+        'createdAt',
+        'updatedAt'
+      ])
+      && request.resource.data.orderId is string
+      && request.resource.data.name is string
+      && request.resource.data.phone is string
+      && request.resource.data.address is string
+      && request.resource.data.location is string
+      && request.resource.data.items is list
+      && request.resource.data.total is number
+      && request.resource.data.paymentMethod is string
+      && request.resource.data.paymentDone is bool
+      && request.resource.data.paymentVerified == false
+      && request.resource.data.status in ['NEW', 'PAYMENT_VERIFIED']
+    }
+
+    match /menu/{menuId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /offers/{offerId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /restaurantSettings/{settingId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /users/{userId} {
+      allow read: if owner(userId) || admin();
+      allow create: if owner(userId);
+      allow update: if owner(userId) || admin();
+      allow delete: if admin();
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if admin() || ownsSubscriptionDocument();
+
+      allow create: if ownsNewSubscriptionDocument()
+        && request.resource.data.status == 'PENDING_PAYMENT'
+        && request.resource.data.paymentStatus == 'PENDING';
+
+      // Customers may edit only checkout/profile/meal-preference fields and
+      // payment-pending metadata. Payment SUCCESS, activation, and delivery-slot
+      // capacity changes are server-controlled.
+      allow update: if admin() || (
+        ownsSubscriptionDocument()
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customerName',
+          'phone',
+          'address',
+          'instructions',
+          'proteinPerMeal',
+          'skippedMeals',
+          'skippedMealRecords',
+          'updatedAt',
+          'slotReservationId',
+          'slotReservationExpiresAt',
+          'paymentOrderId',
+          'paymentStatus',
+          'paymentFailedAt'
+        ])
+        && (
+          request.resource.data.status == resource.data.status
+          || (
+            resource.data.status == 'PENDING_PAYMENT'
+            && request.resource.data.status == 'CANCELLED'
+            && request.resource.data.paymentStatus == 'FAILED'
+          )
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'paymentOrderId', 'paymentStatus', 'paymentFailedAt'
+          ])
+          || (
+            resource.data.paymentStatus != 'SUCCESS'
+            && (
+              request.resource.data.paymentStatus == 'PENDING'
+              || (
+                request.resource.data.paymentStatus == 'FAILED'
+                && request.resource.data.status == 'CANCELLED'
+              )
+            )
+          )
+        )
+      );
+
+      allow delete: if admin();
+    }
+
+    match /orders/{orderId} {
+      // Customers do not need an account to place a menu order.
+      // They may create a validated order, but only admins can read or change orders.
+      allow read: if admin();
+      allow create: if validGuestOrder();
+      allow update: if admin();
+      allow delete: if admin();
+    }
+
+    // Public availability only. Counters are never client-writable.
+    match /deliverySlotCounters/{slotId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    // Reservations are server-only because they control real delivery capacity.
+    match /deliverySlotReservations/{reservationId} {
+      allow read: if admin();
+      allow write: if admin();
+    }
+
+    // Cashfree webhook idempotency records are server-only.
+    match /cashfreeWebhookEvents/{eventId} {
+      allow read, write: if admin();
+    }
+
+    match /customerReviews/{reviewId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

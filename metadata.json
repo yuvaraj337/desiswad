@@ -1,0 +1,6 @@
+{
+  "name": "Desi Swad Mahagama",
+  "description": "Desi Swad Mahagama — Indian restaurant on Main Road, near LIC Office, Mahagama, Jharkhand.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
